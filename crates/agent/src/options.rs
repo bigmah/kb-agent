@@ -10,7 +10,7 @@ use crate::{Error, Progress, Provider, chunk};
 /// Always sent, never left to the provider or to rig. See
 /// [`Provider::truncates_unknown_models`] for the failure that would otherwise
 /// be waiting on the Anthropic path.
-pub const DEFAULT_MAX_TOKENS: u64 = 8_192;
+pub const DEFAULT_MAX_TOKENS: u64 = 50000;
 
 /// Input tokens of source document per request.
 ///
@@ -18,7 +18,7 @@ pub const DEFAULT_MAX_TOKENS: u64 = 8_192;
 /// *fits*; this is a judgement about what one request should be asked to read
 /// closely. Sections are summarized independently, so a smaller number means
 /// more, more attentive passes and a longer, more expensive run.
-pub const DEFAULT_SECTION_TOKENS: usize = 100_000;
+pub const DEFAULT_SECTION_TOKENS: usize = 700_000;
 
 /// Section summaries requested at once.
 ///
