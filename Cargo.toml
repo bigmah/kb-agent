@@ -2,8 +2,14 @@
 #
 #   crates/pdf-extractor   PDF in, Markdown out, OCR included. No I/O policy,
 #                          no CLI.
-#   crates/agent           Markdown in, a shorter Markdown summary out, via an
-#                          LLM. No I/O policy, no CLI.
+#   crates/agent           One LLM request with a fresh context, in each of the
+#                          roles the knowledge base needs: summarize a document,
+#                          judge whether it is relevant, answer from it alone,
+#                          compare two points, merge them, answer from the
+#                          distilled list. No I/O policy, no CLI.
+#   crates/kb              A directory of documents as a knowledge base: the
+#                          index by path, building it, and running a question
+#                          through every source in it.
 #   crates/kb-agent        the command anyone actually runs.
 #
 # Everything shared between them lives here so the manifests only have to say
@@ -22,6 +28,7 @@ repository = "https://github.com/bigmah/kb-agent"
 [workspace.dependencies]
 pdf-extractor = { path = "crates/pdf-extractor", version = "0.1.0" }
 agent = { path = "crates/agent", version = "0.1.0" }
+kb = { path = "crates/kb", version = "0.1.0" }
 
 # OCR is not optional: a scanned PDF has no text layer, and the point of this
 # library is that callers never have to know which kind they handed it. The
@@ -36,4 +43,8 @@ pdf-inspector = { version = "1.17.0", features = ["ocr"] }
 # extras.
 rig-core = { version = "0.42", default-features = false, features = ["reqwest", "rustls"] }
 
-tokio = { version = "1", default-features = false, features = ["rt", "time", "net", "macros"] }
+tokio = { version = "1", default-features = false, features = ["rt", "time", "sync", "net", "macros"] }
+# `buffer_unordered` is the whole of the fan-out: many requests in flight, a
+# bounded number at a time, results as they land. Already in the tree via rig.
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+walkdir = "2"

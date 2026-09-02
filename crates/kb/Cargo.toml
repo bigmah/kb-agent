@@ -1,0 +1,20 @@
+[package]
+name = "kb"
+description = "A directory of documents as a knowledge base: index it, build it, and ask it a question"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+include = ["src/**/*", "README.md"]
+
+[dependencies]
+agent.workspace = true
+pdf-extractor.workspace = true
+futures.workspace = true
+tokio.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -34,7 +34,7 @@ fn run(options: &Options, input: &str) -> Result<(), agent::Error> {
     eprintln!(
         "wrote {} ({} bytes)",
         output.display(),
-        summary.markdown.len()
+        summary.value.len()
     );
     Ok(())
 }

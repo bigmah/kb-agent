@@ -25,21 +25,24 @@ pub enum Error {
         variable: &'static str,
     },
 
-    /// The provider rejected the request or could not be reached. The string is
-    /// rig's own explanation, which names the HTTP status where there was one.
+    /// The provider rejected the request or could not be reached, and retrying
+    /// did not help. The string is rig's own explanation, which names the HTTP
+    /// status where there was one.
     Provider(String),
 
-    /// The document held nothing to summarize.
+    /// The input held nothing to send.
     Empty(PathBuf),
 
-    /// The document is bigger than one request may carry.
+    /// The input is bigger than one request may carry.
     ///
     /// Never split and never truncated: a summary of part of a document is
     /// indistinguishable from a summary of the whole one once it is written
-    /// down, so the size is reported back to whatever produced the document.
+    /// down, and an answer from part of a document is worse, so the size is
+    /// reported back to whatever produced the input. `path` is the document
+    /// where there was one, and otherwise names what the input was.
     TooLarge {
         path: PathBuf,
-        /// Estimated tokens in the document — see
+        /// Estimated tokens in the input — see
         /// [`CHARS_PER_TOKEN`](crate::CHARS_PER_TOKEN) for why it is an
         /// estimate.
         estimated_tokens: usize,
@@ -51,7 +54,16 @@ pub enum Error {
     /// refusal, which arrives as text saying so.
     NoContent,
 
-    /// The options do not describe a summary that can be produced.
+    /// The model answered, but not in the shape the role asked for — a verdict
+    /// that was neither of the two words allowed, say. The text is kept so the
+    /// caller can see what it did say.
+    Unparseable {
+        /// Which role was asking: `"relevance"`, `"comparison"`, …
+        role: &'static str,
+        text: String,
+    },
+
+    /// The options do not describe a request that can be made.
     Options(String),
 
     /// The destination would have overwritten the source document.
@@ -86,7 +98,7 @@ impl fmt::Display for Error {
             ),
             Self::Provider(what) => f.write_str(what),
             Self::Empty(path) => {
-                write!(f, "{} has nothing to summarize", path.display())
+                write!(f, "{} has nothing to send", path.display())
             }
             Self::TooLarge {
                 path,
@@ -95,11 +107,19 @@ impl fmt::Display for Error {
             } => write!(
                 f,
                 "{} is ~{estimated_tokens} tokens, over the {context_tokens}-token budget \
-                 for one request — summarize a smaller document, or raise context_tokens \
+                 for one request — send a smaller document, or raise context_tokens \
                  if the model's window has room for it",
                 path.display()
             ),
             Self::NoContent => f.write_str("the model returned no text"),
+            Self::Unparseable { role, text } => {
+                let shown: String = text.chars().take(200).collect();
+                let ellipsis = if text.chars().count() > 200 { "…" } else { "" };
+                write!(
+                    f,
+                    "the {role} reply was not in the expected form: {shown:?}{ellipsis}"
+                )
+            }
             Self::Options(what) => f.write_str(what),
             Self::WouldOverwriteInput(path) => {
                 write!(f, "refusing to overwrite the input {}", path.display())
@@ -120,5 +140,22 @@ impl std::error::Error for Error {
 impl From<rig_core::completion::CompletionError> for Error {
     fn from(error: rig_core::completion::CompletionError) -> Self {
         Self::Provider(error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unparseable_reply_shows_what_was_said_but_not_all_of_it() {
+        let error = Error::Unparseable {
+            role: "relevance",
+            text: "x".repeat(500),
+        };
+        let shown = error.to_string();
+        assert!(shown.starts_with("the relevance reply"), "{shown}");
+        assert!(shown.ends_with('…'), "{shown}");
+        assert!(shown.len() < 300, "{shown}");
     }
 }

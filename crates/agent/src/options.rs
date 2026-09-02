@@ -1,4 +1,4 @@
-//! What a summary can be asked for, and what it costs to ask.
+//! What a request can be asked for, and what it costs to ask.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,13 +12,21 @@ use crate::{Error, Progress, Provider};
 /// be waiting on the Anthropic path.
 pub const DEFAULT_MAX_TOKENS: u64 = 50000;
 
-/// Input tokens of source document a request may carry.
+/// Input tokens of source material a request may carry.
 ///
 /// Well under the model's window on purpose: the window has to hold the
-/// preamble and the summary as well as the document, and the token estimate
-/// here is approximate. A document over this budget is refused — see
+/// preamble and the response as well as the input, and the token estimate
+/// here is approximate. An input over this budget is refused — see
 /// [`Error::TooLarge`] — rather than split or truncated.
 pub const DEFAULT_CONTEXT_TOKENS: usize = 700_000;
+
+/// Times a request that failed for a transient reason is sent again before
+/// the failure is reported.
+///
+/// Fanning a question out across a library means many requests in flight at
+/// once, which is exactly when a provider answers with a rate limit. Five
+/// retries with the backoff in `request.rs` is about a minute of patience.
+pub const DEFAULT_RETRIES: u32 = 5;
 
 /// Characters assumed per token when converting a token budget to a character
 /// budget.
@@ -31,10 +39,12 @@ pub const DEFAULT_CONTEXT_TOKENS: usize = 700_000;
 /// tokenizes worse than prose (code, tables, non-Latin scripts).
 pub const CHARS_PER_TOKEN: usize = 3;
 
-/// A summary, configured.
+/// A request, configured.
 ///
 /// Every field has a working default, so `Options::new().summarize(path)` is
-/// the whole API for most callers.
+/// the whole API for most callers. The same options drive every role — see
+/// [the crate docs](crate) for the list — since all of them are one request
+/// with a fresh context.
 #[derive(Clone)]
 pub struct Options {
     pub(crate) provider: Provider,
@@ -44,6 +54,7 @@ pub struct Options {
     pub(crate) max_tokens: u64,
     pub(crate) temperature: Option<f64>,
     pub(crate) context_tokens: usize,
+    pub(crate) retries: u32,
     pub(crate) focus: Option<String>,
     pub(crate) progress: Option<Arc<dyn Fn(Progress) + Send + Sync>>,
 }
@@ -56,6 +67,7 @@ impl Default for Options {
             max_tokens: DEFAULT_MAX_TOKENS,
             temperature: None,
             context_tokens: DEFAULT_CONTEXT_TOKENS,
+            retries: DEFAULT_RETRIES,
             focus: None,
             progress: None,
         }
@@ -70,6 +82,7 @@ impl std::fmt::Debug for Options {
             .field("max_tokens", &self.max_tokens)
             .field("temperature", &self.temperature)
             .field("context_tokens", &self.context_tokens)
+            .field("retries", &self.retries)
             .field("focus", &self.focus)
             .field("progress", &self.progress.as_ref().map(|_| "<callback>"))
             .finish()
@@ -81,8 +94,7 @@ impl Options {
         Self::default()
     }
 
-    /// Which service to summarize with. Defaults to
-    /// [`Provider::OpenAi`] — ChatGPT.
+    /// Which service to send to. Defaults to [`Provider::OpenAi`] — ChatGPT.
     ///
     /// Changing this also changes the default model, so the two stay
     /// consistent unless you set [`Options::model`] as well.
@@ -91,18 +103,17 @@ impl Options {
         self
     }
 
-    /// The model to summarize with. Defaults to the provider's own default —
-    /// see [`Provider::default_model`].
+    /// The model to use. Defaults to the provider's own default — see
+    /// [`Provider::default_model`].
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
         self
     }
 
-    /// Output tokens allowed for the summary. Defaults to
-    /// [`DEFAULT_MAX_TOKENS`].
+    /// Output tokens allowed per request. Defaults to [`DEFAULT_MAX_TOKENS`].
     ///
-    /// Raise it for a longer summary; a request that hits the cap comes back
-    /// truncated rather than failing.
+    /// Raise it for a longer summary or answer; a request that hits the cap
+    /// comes back truncated rather than failing.
     pub fn max_tokens(mut self, max_tokens: u64) -> Self {
         self.max_tokens = max_tokens;
         self
@@ -114,18 +125,27 @@ impl Options {
         self
     }
 
-    /// Input tokens of source document a request may carry. Defaults to
+    /// Input tokens of source material a request may carry. Defaults to
     /// [`DEFAULT_CONTEXT_TOKENS`].
     ///
-    /// A document over the budget is refused. Raise this for a model with a
+    /// An input over the budget is refused. Raise this for a model with a
     /// larger window; produce a smaller document for one without.
     pub fn context_tokens(mut self, tokens: usize) -> Self {
         self.context_tokens = tokens;
         self
     }
 
-    /// What the summary should pay attention to, in your own words — appended
-    /// to the instructions the model is given.
+    /// Times to resend a request the provider turned away for a transient
+    /// reason before giving up. Defaults to [`DEFAULT_RETRIES`]; `0` sends
+    /// each request exactly once.
+    pub fn retries(mut self, retries: u32) -> Self {
+        self.retries = retries;
+        self
+    }
+
+    /// What a summary should pay attention to, in your own words — appended
+    /// to the instructions the model is given when summarizing. The other
+    /// roles ignore it: their instructions are the role.
     ///
     /// ```
     /// # use agent::Options;
@@ -136,8 +156,8 @@ impl Options {
         self
     }
 
-    /// Be told how the run is going. One request is one round trip, which on a
-    /// document this size can still be minutes of silence.
+    /// Be told how a request is going. One request is one round trip, which on
+    /// a document of any size can still be minutes of silence.
     pub fn progress(mut self, on_progress: impl Fn(Progress) + Send + Sync + 'static) -> Self {
         self.progress = Some(Arc::new(on_progress));
         self
@@ -185,11 +205,11 @@ impl Options {
         Ok(())
     }
 
-    /// What summarizing `markdown` would take, without sending anything.
+    /// What sending `markdown` would take, without sending anything.
     ///
     /// Cheap — it reads the file and measures it — and worth doing first,
     /// because the request costs money and because a document over the budget
-    /// is refused rather than summarized in part.
+    /// is refused rather than sent in part.
     pub fn plan(&self, markdown: impl AsRef<Path>) -> Result<Plan, Error> {
         let path = markdown.as_ref();
         self.validate()?;
@@ -197,11 +217,13 @@ impl Options {
         Ok(self.plan_text(&text, path))
     }
 
-    pub(crate) fn plan_text(&self, text: &str, path: &Path) -> Plan {
+    /// [`Options::plan`] for text already in memory. `label` is what the plan
+    /// calls it — the path it came from, or a name for what it is.
+    pub fn plan_text(&self, text: &str, label: impl AsRef<Path>) -> Plan {
         // Leading and trailing whitespace is not sent, so it is not measured.
         let characters = text.trim().len();
         Plan {
-            input: path.to_path_buf(),
+            input: label.as_ref().to_path_buf(),
             characters,
             estimated_tokens: characters / CHARS_PER_TOKEN,
             context_tokens: self.context_tokens,
@@ -212,7 +234,7 @@ impl Options {
     }
 }
 
-/// What a run would involve, from [`Options::plan`].
+/// What a request would involve, from [`Options::plan`].
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Plan {
@@ -220,10 +242,10 @@ pub struct Plan {
     pub characters: usize,
     /// A rough figure — see [`CHARS_PER_TOKEN`] for why it is rough.
     pub estimated_tokens: usize,
-    /// The budget the document was measured against.
+    /// The budget the input was measured against.
     pub context_tokens: usize,
-    /// Whether the document fits in one request. `false` means
-    /// [`Options::summarize`] would refuse it with [`Error::TooLarge`].
+    /// Whether the input fits in one request. `false` means the request would
+    /// be refused with [`Error::TooLarge`].
     pub fits: bool,
     pub provider: Provider,
     pub model: String,
@@ -233,7 +255,7 @@ impl Plan {
     /// One line saying what is about to happen, ready to print.
     pub fn describe(&self) -> String {
         if self.characters == 0 {
-            return format!("{}: nothing to summarize", self.input.display());
+            return format!("{}: nothing to send", self.input.display());
         }
         let outcome = match self.fits {
             true => format!("1 request to {}", self.model),
@@ -275,7 +297,7 @@ mod tests {
     fn an_empty_document_plans_nothing() {
         let plan = Options::new().plan_text("\n\n", Path::new("a.md"));
         assert_eq!(plan.characters, 0);
-        assert!(plan.describe().contains("nothing to summarize"));
+        assert!(plan.describe().contains("nothing to send"));
     }
 
     #[test]

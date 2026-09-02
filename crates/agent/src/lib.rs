@@ -1,4 +1,5 @@
-//! Summarize a Markdown document with an LLM.
+//! One LLM request with a fresh context, in each of the roles a knowledge
+//! base needs.
 //!
 //! ```no_run
 //! # async fn run() -> Result<(), agent::Error> {
@@ -7,16 +8,31 @@
 //! # Ok(()) }
 //! ```
 //!
-//! The document is read whole and sent whole, in one request. It is never split
-//! and never truncated: a document that does not fit the context budget is
-//! refused with [`Error::TooLarge`], because a summary of part of a document
-//! reads exactly like a summary of all of it and nothing downstream could tell
-//! the difference. [`Options::plan`] measures a document without sending it, so
-//! the refusal need not cost a request to discover.
+//! Every role is the same shape: some material goes out under instructions
+//! for that role, in one request, into a context holding nothing else, and
+//! the model's text comes back read into whatever the role returns. The roles
+//! are methods on [`Options`]:
+//!
+//! | Role | Sees | Returns |
+//! | --- | --- | --- |
+//! | [`Options::summarize`] | one document | a shorter document |
+//! | [`Options::relevant`] | a question and one summary | whether the document is worth reading |
+//! | [`Options::ask`] | a question and one document | what that document says, as points |
+//! | [`Options::same_point`] | two points | whether they carry the same information |
+//! | [`Options::merge_points`] | points judged the same | the one point that carries all of them |
+//! | [`Options::answer`] | a question and the distilled points | the answer |
+//!
+//! The material is sent whole and never split or truncated: a request that
+//! does not fit the context budget is refused with [`Error::TooLarge`],
+//! because a summary of part of a document reads exactly like a summary of
+//! all of it and nothing downstream could tell the difference.
+//! [`Options::plan`] measures a document without sending it, so the refusal
+//! need not cost a request to discover.
 //!
 //! Written against [rig](https://docs.rs/rig-core). ChatGPT by default — set
 //! `OPENAI_API_KEY` and nothing else is required; see [`Provider`] to point it
-//! elsewhere.
+//! elsewhere. Requests the provider turns away for being busy are retried
+//! with a backoff; see [`Options::retries`].
 //!
 //! # Anything more than the default
 //!
@@ -39,18 +55,23 @@
 //! # If you are not already async
 //!
 //! The `blocking` feature (on by default) adds a synchronous mirror of the
-//! whole API, so a program that is not built around a runtime can still call
-//! this crate:
+//! summarizing API, so a program that is not built around a runtime can still
+//! call it:
 //!
 //! ```no_run
 //! let summary = agent::blocking::summarize_markdown_file("book.md")?;
 //! # Ok::<(), agent::Error>(())
 //! ```
 
+mod answer;
+mod ask;
 mod error;
 mod options;
 mod provider;
+mod reduce;
+mod relevance;
 mod report;
+mod request;
 mod summarize;
 
 #[cfg(feature = "blocking")]
@@ -59,9 +80,11 @@ pub mod blocking;
 use std::path::{Path, PathBuf};
 
 pub use error::Error;
-pub use options::{CHARS_PER_TOKEN, DEFAULT_CONTEXT_TOKENS, DEFAULT_MAX_TOKENS, Options, Plan};
+pub use options::{
+    CHARS_PER_TOKEN, DEFAULT_CONTEXT_TOKENS, DEFAULT_MAX_TOKENS, DEFAULT_RETRIES, Options, Plan,
+};
 pub use provider::Provider;
-pub use report::{Progress, Summary, format_duration};
+pub use report::{Progress, Reply, Usage, format_duration};
 
 /// Summarize `markdown` into a file beside it, and return where that landed.
 ///
@@ -77,7 +100,7 @@ pub async fn summarize_markdown_file(markdown: impl AsRef<Path>) -> Result<PathB
 
 /// Summarize `markdown` and return the summary.
 pub async fn summarize_markdown(markdown: impl AsRef<Path>) -> Result<String, Error> {
-    Ok(Options::new().summarize(markdown).await?.markdown)
+    Ok(Options::new().summarize(markdown).await?.value)
 }
 
 /// Where [`summarize_markdown_file`] writes: the input's name, plus
@@ -100,11 +123,21 @@ pub fn default_output(markdown: impl AsRef<Path>) -> PathBuf {
 }
 
 impl Options {
-    /// Summarize `markdown` and return the summary with what it took.
-    pub async fn summarize(&self, markdown: impl AsRef<Path>) -> Result<Summary, Error> {
+    /// Summarize the document at `markdown` and return the summary with what
+    /// it took.
+    pub async fn summarize(&self, markdown: impl AsRef<Path>) -> Result<Reply<String>, Error> {
         let path = markdown.as_ref();
         let text = std::fs::read_to_string(path).map_err(|e| Error::io("read", path, e))?;
         summarize::summarize(&text, path, self).await
+    }
+
+    /// Summarize `text`, calling it `label` in any refusal.
+    pub async fn summarize_text(
+        &self,
+        text: &str,
+        label: impl AsRef<Path>,
+    ) -> Result<Reply<String>, Error> {
+        summarize::summarize(text, label.as_ref(), self).await
     }
 
     /// Summarize `markdown` and write the summary to `summary`.
@@ -114,13 +147,13 @@ impl Options {
         &self,
         markdown: impl AsRef<Path>,
         summary: impl AsRef<Path>,
-    ) -> Result<Summary, Error> {
+    ) -> Result<Reply<String>, Error> {
         let (markdown, destination) = (markdown.as_ref(), summary.as_ref());
         if same_file(markdown, destination) {
             return Err(Error::WouldOverwriteInput(markdown.to_path_buf()));
         }
         let summary = self.summarize(markdown).await?;
-        std::fs::write(destination, &summary.markdown)
+        std::fs::write(destination, &summary.value)
             .map_err(|e| Error::io("write", destination, e))?;
         Ok(summary)
     }
@@ -181,5 +214,38 @@ mod tests {
             .await
             .expect_err("failed");
         assert!(matches!(error, Error::Io { .. }), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn every_role_checks_for_a_key_before_sending() {
+        // With no key in the environment nothing may go out. Each role has to
+        // fail the same way, before any request, and without touching the
+        // network — which is also what makes this test safe to run anywhere.
+        // SAFETY: tests in this crate never read the variable concurrently
+        // except through this function, and the value is restored before it
+        // returns.
+        let saved = std::env::var("OPENAI_API_KEY").ok();
+        unsafe { std::env::remove_var("OPENAI_API_KEY") };
+        let options = Options::new().provider(Provider::OpenAi);
+        let ask = options.ask("q", "doc", "doc.md").await;
+        let relevant = options.relevant("q", "summary").await;
+        let same = options.same_point("a", "b").await;
+        let merge = options.merge_points(&["a".to_string(), "b".to_string()]).await;
+        let answer = options.answer("q", "- p [x]").await;
+        let summary = options.summarize_text("doc", "doc.md").await;
+        if let Some(key) = saved {
+            unsafe { std::env::set_var("OPENAI_API_KEY", key) };
+        }
+        for outcome in [
+            ask.map(|_| ()),
+            relevant.map(|_| ()),
+            same.map(|_| ()),
+            merge.map(|_| ()),
+            answer.map(|_| ()),
+            summary.map(|_| ()),
+        ] {
+            let error = outcome.expect_err("no key");
+            assert!(matches!(error, Error::NoApiKey { .. }), "{error:?}");
+        }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "kb-agent"
-description = "Command-line entry point: turn documents into Markdown"
+description = "Command-line entry point: build a knowledge base from documents and ask it questions"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,3 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 pdf-extractor.workspace = true
+agent.workspace = true
+kb.workspace = true
+tokio.workspace = true

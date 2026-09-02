@@ -1821,10 +1821,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kb"
+version = "0.1.0"
+dependencies = [
+ "agent",
+ "futures",
+ "pdf-extractor",
+ "tokio",
+ "walkdir",
+]
+
+[[package]]
 name = "kb-agent"
 version = "0.1.0"
 dependencies = [
+ "agent",
+ "kb",
  "pdf-extractor",
+ "tokio",
 ]
 
 [[package]]

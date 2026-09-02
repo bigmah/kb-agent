@@ -1,6 +1,6 @@
 [package]
 name = "agent"
-description = "Summarize a Markdown document with an LLM, via rig"
+description = "One LLM request with a fresh context, in each role a knowledge base needs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,14 +11,15 @@ include = ["src/**/*", "examples/**/*", "README.md"]
 
 [dependencies]
 rig-core.workspace = true
-tokio = { workspace = true, optional = true }
+# `time` for the backoff between retries; `rt` only matters to the `blocking`
+# module, but rig already carries the whole of tokio, so gating it buys nothing.
+tokio.workspace = true
 
 [features]
 default = ["blocking"]
 # `blocking::summarize_*`, which owns a runtime so a synchronous program can
-# call this crate without becoming async. Off, the crate is async-only and
-# tokio is not a dependency.
-blocking = ["dep:tokio"]
+# call this crate without becoming async.
+blocking = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -1,9 +1,11 @@
-//! The whole API again, synchronously, for a program that is not built around
-//! an async runtime.
+//! The summarizing API again, synchronously, for a program that is not built
+//! around an async runtime.
 //!
 //! Each call owns a single-threaded runtime for its own duration. That is the
 //! right trade for a command-line tool — one summary, then exit — and the wrong
 //! one for a server, which should use the async API and its existing runtime.
+//! The other roles are async only: anything asking a question of a whole
+//! library is running many requests at once, and already has a runtime.
 //!
 //! # Do not call these from inside a runtime
 //!
@@ -13,7 +15,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{Error, Options, Summary};
+use crate::{Error, Options, Reply};
 
 /// Blocking [`crate::summarize_markdown_file`].
 pub fn summarize_markdown_file(markdown: impl AsRef<Path>) -> Result<PathBuf, Error> {
@@ -27,7 +29,7 @@ pub fn summarize_markdown(markdown: impl AsRef<Path>) -> Result<String, Error> {
 
 impl Options {
     /// Blocking [`Options::summarize`](crate::Options::summarize).
-    pub fn summarize_blocking(&self, markdown: impl AsRef<Path>) -> Result<Summary, Error> {
+    pub fn summarize_blocking(&self, markdown: impl AsRef<Path>) -> Result<Reply<String>, Error> {
         on_a_runtime(self.summarize(markdown))
     }
 
@@ -36,7 +38,7 @@ impl Options {
         &self,
         markdown: impl AsRef<Path>,
         summary: impl AsRef<Path>,
-    ) -> Result<Summary, Error> {
+    ) -> Result<Reply<String>, Error> {
         on_a_runtime(self.summarize_to_file(markdown, summary))
     }
 }
@@ -46,7 +48,7 @@ impl Options {
 /// Current-thread rather than multi-threaded: the work is one document's worth
 /// of HTTP, so there is nothing for extra worker threads to do, and a
 /// command-line tool should not stand up a thread pool to make a few requests.
-fn on_a_runtime<T>(future: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
+pub fn on_a_runtime<T>(future: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
