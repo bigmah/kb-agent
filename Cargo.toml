@@ -36,8 +36,4 @@ pdf-inspector = { version = "1.17.0", features = ["ocr"] }
 # extras.
 rig-core = { version = "0.42", default-features = false, features = ["reqwest", "rustls"] }
 
-# `futures` is only for `buffered()`, which runs N section summaries at once and
-# still yields them in document order. Already in the tree under rig-core.
-futures = "0.3"
-
 tokio = { version = "1", default-features = false, features = ["rt", "time", "net", "macros"] }

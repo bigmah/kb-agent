@@ -32,6 +32,21 @@ pub enum Error {
     /// The document held nothing to summarize.
     Empty(PathBuf),
 
+    /// The document is bigger than one request may carry.
+    ///
+    /// Never split and never truncated: a summary of part of a document is
+    /// indistinguishable from a summary of the whole one once it is written
+    /// down, so the size is reported back to whatever produced the document.
+    TooLarge {
+        path: PathBuf,
+        /// Estimated tokens in the document — see
+        /// [`CHARS_PER_TOKEN`](crate::CHARS_PER_TOKEN) for why it is an
+        /// estimate.
+        estimated_tokens: usize,
+        /// The budget it exceeded: [`Options::context_tokens`](crate::Options::context_tokens).
+        context_tokens: usize,
+    },
+
     /// The model returned a response with no text in it. Not the same as a
     /// refusal, which arrives as text saying so.
     NoContent,
@@ -73,6 +88,17 @@ impl fmt::Display for Error {
             Self::Empty(path) => {
                 write!(f, "{} has nothing to summarize", path.display())
             }
+            Self::TooLarge {
+                path,
+                estimated_tokens,
+                context_tokens,
+            } => write!(
+                f,
+                "{} is ~{estimated_tokens} tokens, over the {context_tokens}-token budget \
+                 for one request — summarize a smaller document, or raise context_tokens \
+                 if the model's window has room for it",
+                path.display()
+            ),
             Self::NoContent => f.write_str("the model returned no text"),
             Self::Options(what) => f.write_str(what),
             Self::WouldOverwriteInput(path) => {

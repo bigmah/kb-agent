@@ -35,7 +35,7 @@ let summary  = agent::summarize_markdown_file("book.md").await?;   // book_summa
 Each crate's README covers the rest of its API:
 [pdf-extractor](crates/pdf-extractor/README.md) for page selection, OCR and the
 one line a host binary owes it; [agent](crates/agent/README.md) for providers,
-long-document splitting and cost; [kb-agent](crates/kb-agent/README.md) for the
+the context budget and cost; [kb-agent](crates/kb-agent/README.md) for the
 flags.
 
 ## Setup, and why there isn't any
@@ -60,8 +60,8 @@ cargo test --workspace
 ```
 
 Unit tests only, and fast — nothing here needs an API key, a GPU, or a network.
-They cover argument parsing, the worker wire format, page assembly, Markdown
-splitting and the reporting lines.
+They cover argument parsing, the worker wire format, page assembly, the
+context-budget check and the reporting lines.
 
 The end-to-end checks need a real document, and real documents are too big to
 carry in git, so `samples/` is ignored rather than committed. Put any PDF in

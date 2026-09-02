@@ -7,12 +7,12 @@
 //! # Ok(()) }
 //! ```
 //!
-//! The document is read whole. One that fits in a single request gets a single
-//! request; a longer one is summarized in sections and the section summaries
-//! are summarized in turn, so the summary is of the whole document and not of
-//! its first few pages. Nothing is ever truncated to fit — `src/chunk.rs` has
-//! how the splitting avoids it, and [`Options::plan`] tells you what a given
-//! document will cost before you spend it.
+//! The document is read whole and sent whole, in one request. It is never split
+//! and never truncated: a document that does not fit the context budget is
+//! refused with [`Error::TooLarge`], because a summary of part of a document
+//! reads exactly like a summary of all of it and nothing downstream could tell
+//! the difference. [`Options::plan`] measures a document without sending it, so
+//! the refusal need not cost a request to discover.
 //!
 //! Written against [rig](https://docs.rs/rig-core). ChatGPT by default — set
 //! `OPENAI_API_KEY` and nothing else is required; see [`Provider`] to point it
@@ -21,19 +21,14 @@
 //! # Anything more than the default
 //!
 //! ```no_run
-//! use agent::{Options, Progress};
+//! use agent::Options;
 //!
 //! # async fn run() -> Result<(), agent::Error> {
 //! let plan = Options::new().plan("book.md")?;
-//! eprintln!("{}", plan.describe());          // "book.md: ~533000 tokens, 6 sections, 7 requests…"
+//! eprintln!("{}", plan.describe());          // "book.md: ~533000 tokens, 1 request to gpt-5.6"
 //!
 //! let summary = Options::new()
 //!     .focus("Keep every figure and date.")
-//!     .progress(|event| {
-//!         if let Progress::Section { done, total } = event {
-//!             eprintln!("section {done} of {total}");
-//!         }
-//!     })
 //!     .summarize_to_file("book.md", "book_summary.md")
 //!     .await?;
 //!
@@ -52,7 +47,6 @@
 //! # Ok::<(), agent::Error>(())
 //! ```
 
-mod chunk;
 mod error;
 mod options;
 mod provider;
@@ -64,9 +58,8 @@ pub mod blocking;
 
 use std::path::{Path, PathBuf};
 
-pub use chunk::CHARS_PER_TOKEN;
 pub use error::Error;
-pub use options::{DEFAULT_CONCURRENCY, DEFAULT_MAX_TOKENS, DEFAULT_SECTION_TOKENS, Options, Plan};
+pub use options::{CHARS_PER_TOKEN, DEFAULT_CONTEXT_TOKENS, DEFAULT_MAX_TOKENS, Options, Plan};
 pub use provider::Provider;
 pub use report::{Progress, Summary, format_duration};
 
@@ -170,19 +163,22 @@ mod tests {
         assert!(output.file_name().is_some());
     }
 
-    #[test]
-    fn summarizing_onto_the_input_is_refused() {
+    #[tokio::test]
+    async fn summarizing_onto_the_input_is_refused() {
         // Neither path exists, so this exercises the textual fallback — which
         // is the case that matters, since the output usually does not exist.
-        let error =
-            futures::executor::block_on(Options::new().summarize_to_file("book.md", "book.md"))
-                .expect_err("refused");
+        let error = Options::new()
+            .summarize_to_file("book.md", "book.md")
+            .await
+            .expect_err("refused");
         assert!(matches!(error, Error::WouldOverwriteInput(_)), "{error:?}");
     }
 
-    #[test]
-    fn a_missing_input_is_an_io_error() {
-        let error = futures::executor::block_on(Options::new().summarize("nope/missing.md"))
+    #[tokio::test]
+    async fn a_missing_input_is_an_io_error() {
+        let error = Options::new()
+            .summarize("nope/missing.md")
+            .await
             .expect_err("failed");
         assert!(matches!(error, Error::Io { .. }), "{error:?}");
     }

@@ -4,9 +4,10 @@
 //! cargo run --release --example summarize -- notes.md
 //! ```
 //!
-//! Prints the plan first, because the next thing it does costs money.
+//! Prints the plan first, because the next thing it does costs money — and
+//! because the plan is where a document too big to summarize is caught.
 
-use agent::{Options, Progress};
+use agent::Options;
 
 fn main() -> std::process::ExitCode {
     let Some(input) = std::env::args().nth(1) else {
@@ -14,14 +15,7 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::FAILURE;
     };
 
-    let options = Options::new().progress(|event| match event {
-        Progress::Starting { total } if total > 1 => eprintln!("summarizing {total} sections"),
-        Progress::Section { done, total } if total > 1 => eprintln!("  section {done} of {total}"),
-        Progress::Fusing { total } => eprintln!("fusing {total} section summaries"),
-        _ => {}
-    });
-
-    match run(&options, &input) {
+    match run(&Options::new(), &input) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");

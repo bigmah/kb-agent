@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::{Error, Progress, Provider, chunk};
+use crate::{Error, Progress, Provider};
 
 /// Output tokens allowed per request, unless the caller says otherwise.
 ///
@@ -12,25 +12,29 @@ use crate::{Error, Progress, Provider, chunk};
 /// be waiting on the Anthropic path.
 pub const DEFAULT_MAX_TOKENS: u64 = 50000;
 
-/// Input tokens of source document per request.
+/// Input tokens of source document a request may carry.
 ///
-/// Well under the model's window on purpose. The window is the ceiling on what
-/// *fits*; this is a judgement about what one request should be asked to read
-/// closely. Sections are summarized independently, so a smaller number means
-/// more, more attentive passes and a longer, more expensive run.
-pub const DEFAULT_SECTION_TOKENS: usize = 700_000;
+/// Well under the model's window on purpose: the window has to hold the
+/// preamble and the summary as well as the document, and the token estimate
+/// here is approximate. A document over this budget is refused — see
+/// [`Error::TooLarge`] — rather than split or truncated.
+pub const DEFAULT_CONTEXT_TOKENS: usize = 700_000;
 
-/// Section summaries requested at once.
+/// Characters assumed per token when converting a token budget to a character
+/// budget.
 ///
-/// Sections do not depend on each other, so they can run concurrently; the cap
-/// keeps a long document from opening fifty connections and being rate-limited
-/// for it.
-pub const DEFAULT_CONCURRENCY: usize = 4;
+/// The real answer needs the model's tokenizer, which is not available locally,
+/// and the `count_tokens` endpoint would cost a network round trip. This
+/// approximation is deliberately pessimistic: English prose runs closer to 4
+/// characters per token, so budgeting at 3 leaves roughly a quarter of the
+/// window as headroom for the preamble, the response, and any text that
+/// tokenizes worse than prose (code, tables, non-Latin scripts).
+pub const CHARS_PER_TOKEN: usize = 3;
 
 /// A summary, configured.
 ///
-/// Every field has a working default, so `Options::new().summarize_file(path)`
-/// is the whole API for most callers.
+/// Every field has a working default, so `Options::new().summarize(path)` is
+/// the whole API for most callers.
 #[derive(Clone)]
 pub struct Options {
     pub(crate) provider: Provider,
@@ -39,8 +43,7 @@ pub struct Options {
     pub(crate) model: Option<String>,
     pub(crate) max_tokens: u64,
     pub(crate) temperature: Option<f64>,
-    pub(crate) section_tokens: usize,
-    pub(crate) concurrency: usize,
+    pub(crate) context_tokens: usize,
     pub(crate) focus: Option<String>,
     pub(crate) progress: Option<Arc<dyn Fn(Progress) + Send + Sync>>,
 }
@@ -52,8 +55,7 @@ impl Default for Options {
             model: None,
             max_tokens: DEFAULT_MAX_TOKENS,
             temperature: None,
-            section_tokens: DEFAULT_SECTION_TOKENS,
-            concurrency: DEFAULT_CONCURRENCY,
+            context_tokens: DEFAULT_CONTEXT_TOKENS,
             focus: None,
             progress: None,
         }
@@ -67,8 +69,7 @@ impl std::fmt::Debug for Options {
             .field("model", &self.resolved_model())
             .field("max_tokens", &self.max_tokens)
             .field("temperature", &self.temperature)
-            .field("section_tokens", &self.section_tokens)
-            .field("concurrency", &self.concurrency)
+            .field("context_tokens", &self.context_tokens)
             .field("focus", &self.focus)
             .field("progress", &self.progress.as_ref().map(|_| "<callback>"))
             .finish()
@@ -97,7 +98,8 @@ impl Options {
         self
     }
 
-    /// Output tokens allowed per request. Defaults to [`DEFAULT_MAX_TOKENS`].
+    /// Output tokens allowed for the summary. Defaults to
+    /// [`DEFAULT_MAX_TOKENS`].
     ///
     /// Raise it for a longer summary; a request that hits the cap comes back
     /// truncated rather than failing.
@@ -112,18 +114,13 @@ impl Options {
         self
     }
 
-    /// Input tokens of source document per request. Defaults to
-    /// [`DEFAULT_SECTION_TOKENS`]; see [`Options::plan`] to find out what a
-    /// given document would cost before running it.
-    pub fn section_tokens(mut self, tokens: usize) -> Self {
-        self.section_tokens = tokens;
-        self
-    }
-
-    /// How many sections to summarize at once. Defaults to
-    /// [`DEFAULT_CONCURRENCY`]; 1 runs them one after another.
-    pub fn concurrency(mut self, concurrency: usize) -> Self {
-        self.concurrency = concurrency.max(1);
+    /// Input tokens of source document a request may carry. Defaults to
+    /// [`DEFAULT_CONTEXT_TOKENS`].
+    ///
+    /// A document over the budget is refused. Raise this for a model with a
+    /// larger window; produce a smaller document for one without.
+    pub fn context_tokens(mut self, tokens: usize) -> Self {
+        self.context_tokens = tokens;
         self
     }
 
@@ -139,8 +136,8 @@ impl Options {
         self
     }
 
-    /// Be told how a multi-section run is going. A document that fits in one
-    /// request never reports progress; a long one can take minutes.
+    /// Be told how the run is going. One request is one round trip, which on a
+    /// document this size can still be minutes of silence.
     pub fn progress(mut self, on_progress: impl Fn(Progress) + Send + Sync + 'static) -> Self {
         self.progress = Some(Arc::new(on_progress));
         self
@@ -154,10 +151,8 @@ impl Options {
     }
 
     /// Source characters allowed in one request.
-    pub(crate) fn section_chars(&self) -> usize {
-        self.section_tokens
-            .saturating_mul(chunk::CHARS_PER_TOKEN)
-            .max(1)
+    pub(crate) fn context_chars(&self) -> usize {
+        self.context_tokens.saturating_mul(CHARS_PER_TOKEN).max(1)
     }
 
     pub(crate) fn emit(&self, event: Progress) {
@@ -175,9 +170,9 @@ impl Options {
                 "max_tokens must be greater than 0".to_string(),
             ));
         }
-        if self.section_tokens == 0 {
+        if self.context_tokens == 0 {
             return Err(Error::Options(
-                "section_tokens must be greater than 0".to_string(),
+                "context_tokens must be greater than 0".to_string(),
             ));
         }
         if let Some(temperature) = self.temperature
@@ -192,9 +187,9 @@ impl Options {
 
     /// What summarizing `markdown` would take, without sending anything.
     ///
-    /// Cheap — it reads the file and splits it — and worth doing first, because
-    /// every request after the first costs money and a long document is not
-    /// obviously a long document from its name.
+    /// Cheap — it reads the file and measures it — and worth doing first,
+    /// because the request costs money and because a document over the budget
+    /// is refused rather than summarized in part.
     pub fn plan(&self, markdown: impl AsRef<Path>) -> Result<Plan, Error> {
         let path = markdown.as_ref();
         self.validate()?;
@@ -203,14 +198,14 @@ impl Options {
     }
 
     pub(crate) fn plan_text(&self, text: &str, path: &Path) -> Plan {
-        let sections = chunk::split(text, self.section_chars()).len();
+        // Leading and trailing whitespace is not sent, so it is not measured.
+        let characters = text.trim().len();
         Plan {
             input: path.to_path_buf(),
-            characters: text.len(),
-            estimated_tokens: text.len() / chunk::CHARS_PER_TOKEN,
-            sections,
-            // One request per section, plus one to fuse them.
-            requests: if sections > 1 { sections + 1 } else { sections },
+            characters,
+            estimated_tokens: characters / CHARS_PER_TOKEN,
+            context_tokens: self.context_tokens,
+            fits: characters <= self.context_chars(),
             provider: self.provider,
             model: self.resolved_model().to_string(),
         }
@@ -223,12 +218,13 @@ impl Options {
 pub struct Plan {
     pub input: PathBuf,
     pub characters: usize,
-    /// A rough figure — see [`chunk::CHARS_PER_TOKEN`] for why it is rough.
+    /// A rough figure — see [`CHARS_PER_TOKEN`] for why it is rough.
     pub estimated_tokens: usize,
-    /// Sections the document splits into. 1 means a single request.
-    pub sections: usize,
-    /// Requests this would send, including the one that fuses the sections.
-    pub requests: usize,
+    /// The budget the document was measured against.
+    pub context_tokens: usize,
+    /// Whether the document fits in one request. `false` means
+    /// [`Options::summarize`] would refuse it with [`Error::TooLarge`].
+    pub fits: bool,
     pub provider: Provider,
     pub model: String,
 }
@@ -236,16 +232,20 @@ pub struct Plan {
 impl Plan {
     /// One line saying what is about to happen, ready to print.
     pub fn describe(&self) -> String {
-        let scale = match self.sections {
-            0 => return format!("{}: nothing to summarize", self.input.display()),
-            1 => "1 request".to_string(),
-            n => format!("{n} sections, {} requests", self.requests),
+        if self.characters == 0 {
+            return format!("{}: nothing to summarize", self.input.display());
+        }
+        let outcome = match self.fits {
+            true => format!("1 request to {}", self.model),
+            false => format!(
+                "over the {}-token budget — will be refused",
+                self.context_tokens
+            ),
         };
         format!(
-            "{}: ~{} tokens, {scale} to {}",
+            "{}: ~{} tokens, {outcome}",
             self.input.display(),
             self.estimated_tokens,
-            self.model
         )
     }
 }
@@ -255,41 +255,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_short_document_plans_one_request() {
+    fn a_document_that_fits_plans_one_request() {
         let plan = Options::new().plan_text("# Title\n\nbody\n", Path::new("a.md"));
-        assert_eq!(plan.sections, 1);
-        assert_eq!(plan.requests, 1);
+        assert!(plan.fits);
+        assert!(plan.describe().contains("1 request"), "{plan:?}");
     }
 
     #[test]
-    fn a_long_document_plans_a_fusing_request_too() {
+    fn a_document_over_the_budget_does_not_fit() {
         let text = "# A\n".to_string() + &"word ".repeat(5_000);
         let plan = Options::new()
-            .section_tokens(100)
+            .context_tokens(100)
             .plan_text(&text, Path::new("a.md"));
-        assert!(plan.sections > 1, "{plan:?}");
-        assert_eq!(plan.requests, plan.sections + 1);
+        assert!(!plan.fits, "{plan:?}");
+        assert!(plan.describe().contains("over the 100-token budget"));
     }
 
     #[test]
     fn an_empty_document_plans_nothing() {
         let plan = Options::new().plan_text("\n\n", Path::new("a.md"));
-        assert_eq!(plan.sections, 0);
-        assert_eq!(plan.requests, 0);
+        assert_eq!(plan.characters, 0);
         assert!(plan.describe().contains("nothing to summarize"));
     }
 
     #[test]
     fn bad_options_are_refused() {
         assert!(Options::new().max_tokens(0).validate().is_err());
-        assert!(Options::new().section_tokens(0).validate().is_err());
+        assert!(Options::new().context_tokens(0).validate().is_err());
         assert!(Options::new().model("  ").validate().is_err());
         assert!(Options::new().temperature(f64::NAN).validate().is_err());
         assert!(Options::new().validate().is_ok());
-    }
-
-    #[test]
-    fn concurrency_is_never_zero() {
-        assert_eq!(Options::new().concurrency(0).concurrency, 1);
     }
 }
