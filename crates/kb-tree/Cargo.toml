@@ -1,0 +1,15 @@
+[package]
+name = "kb-tree"
+description = "Command-line entry point: turn documents into Markdown"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "kb-tree"
+path = "src/main.rs"
+
+[dependencies]
+pdf-extractor.workspace = true

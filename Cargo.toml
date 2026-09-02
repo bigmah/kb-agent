@@ -1,0 +1,43 @@
+# kb-tree — a workspace of libraries and the one command that drives them.
+#
+#   crates/pdf-extractor   PDF in, Markdown out, OCR included. No I/O policy,
+#                          no CLI.
+#   crates/agent           Markdown in, a shorter Markdown summary out, via an
+#                          LLM. No I/O policy, no CLI.
+#   crates/kb-tree         the command anyone actually runs.
+#
+# Everything shared between them lives here so the manifests only have to say
+# what makes them different.
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bigmah/kb-tree"
+
+[workspace.dependencies]
+pdf-extractor = { path = "crates/pdf-extractor", version = "0.1.0" }
+agent = { path = "crates/agent", version = "0.1.0" }
+
+# OCR is not optional: a scanned PDF has no text layer, and the point of this
+# library is that callers never have to know which kind they handed it. The
+# `ocr` feature adds PDFium for page rendering and PP-OCRv6 Small on ONNX
+# Runtime for recognition. Neither library is linked in — both are dlopen'd the
+# first time a page actually needs OCR — so a text PDF pays nothing for their
+# presence.
+pdf-inspector = { version = "1.17.0", features = ["ocr"] }
+
+# The LLM client behind `agent`. Default features carry reqwest + rustls, which
+# is the whole HTTP stack; nothing here needs the websocket, pdf or image
+# extras.
+rig-core = { version = "0.42", default-features = false, features = ["reqwest", "rustls"] }
+
+# `futures` is only for `buffered()`, which runs N section summaries at once and
+# still yields them in document order. Already in the tree under rig-core.
+futures = "0.3"
+
+tokio = { version = "1", default-features = false, features = ["rt", "time", "net", "macros"] }

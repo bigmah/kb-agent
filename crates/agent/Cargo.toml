@@ -1,0 +1,25 @@
+[package]
+name = "agent"
+description = "Summarize a Markdown document with an LLM, via rig"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+include = ["src/**/*", "examples/**/*", "README.md"]
+
+[dependencies]
+rig-core.workspace = true
+futures.workspace = true
+tokio = { workspace = true, optional = true }
+
+[features]
+default = ["blocking"]
+# `blocking::summarize_*`, which owns a runtime so a synchronous program can
+# call this crate without becoming async. Off, the crate is async-only and
+# tokio is not a dependency.
+blocking = ["dep:tokio"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

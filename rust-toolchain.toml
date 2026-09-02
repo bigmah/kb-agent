@@ -1,0 +1,8 @@
+# The OCR stack (oar-ocr, via pdf-inspector) declares rustc 1.95 as its
+# minimum, so a default `cargo build` on an older toolchain refuses to compile
+# it. Pinning here makes rustup fetch 1.95 on the first build instead of
+# requiring `--ignore-rust-version` on every one; the machine's own default
+# toolchain is left alone.
+[toolchain]
+channel = "1.95"
+profile = "minimal"

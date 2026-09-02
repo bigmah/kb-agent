@@ -1,0 +1,8 @@
+/target
+.DS_Store
+# Sample documents: a 19 MB scanned book and the 1.5 MB Markdown it converts
+# to. Local scratch for trying the tools out, not something to carry in git.
+/samples
+# Third-party shared libraries fetched by
+# crates/pdf-extractor/scripts/fetch-ocr-runtime.sh.
+/crates/pdf-extractor/vendor

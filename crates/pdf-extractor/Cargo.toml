@@ -1,0 +1,17 @@
+[package]
+name = "pdf-extractor"
+description = "Convert a PDF to Markdown, OCRing whatever the text layer cannot serve"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+# The binary is `kb-tree`; this crate is the library it calls. `vendor/` holds
+# multi-hundred-megabyte shared libraries fetched by build.rs, so keep the
+# published package to the sources and the fetch script.
+include = ["src/**/*", "examples/**/*", "build.rs", "scripts/**/*", "README.md"]
+
+[dependencies]
+pdf-inspector.workspace = true
