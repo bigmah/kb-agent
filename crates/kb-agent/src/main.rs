@@ -1,4 +1,4 @@
-//! kb-tree — the command that turns documents into Markdown.
+//! kb-agent — the command that turns documents into Markdown.
 //!
 //! The conversion itself lives in [`pdf_extractor`]; everything here is the
 //! things a library should not decide: what the flags are called, where the
@@ -38,7 +38,7 @@ fn run() -> Result<(), String> {
             return Ok(());
         }
         Parsed::Version => {
-            println!("kb-tree {}", env!("CARGO_PKG_VERSION"));
+            println!("kb-agent {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         Parsed::Run(invocation) => *invocation,

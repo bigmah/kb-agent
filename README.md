@@ -1,11 +1,11 @@
-# kb-tree
+# kb-agent
 
 Turns documents into Markdown, and Markdown into shorter Markdown. Today that
 means PDFs, including scanned ones, and LLM summaries of what comes out.
 
 ```bash
 cargo build --release
-./target/release/kb-tree book.pdf              # writes book.md
+./target/release/kb-agent book.pdf              # writes book.md
 ```
 
 There is one command and one code path, whatever kind of PDF you hand it. Pages
@@ -20,7 +20,7 @@ which kind of PDF it has.
 | --- | --- |
 | [`crates/pdf-extractor`](crates/pdf-extractor) | PDF in, Markdown out, OCR included. |
 | [`crates/agent`](crates/agent) | Markdown in, a shorter Markdown summary out, via an LLM. |
-| [`crates/kb-tree`](crates/kb-tree) | The command. Flags, files, and everything said on the way. |
+| [`crates/kb-agent`](crates/kb-agent) | The command. Flags, files, and everything said on the way. |
 | `samples/` | Untracked scratch for trying the tools on real documents — see below. |
 
 The split is the point: each library decides nothing about where output goes or
@@ -35,7 +35,7 @@ let summary  = agent::summarize_markdown_file("book.md").await?;   // book_summa
 Each crate's README covers the rest of its API:
 [pdf-extractor](crates/pdf-extractor/README.md) for page selection, OCR and the
 one line a host binary owes it; [agent](crates/agent/README.md) for providers,
-long-document splitting and cost; [kb-tree](crates/kb-tree/README.md) for the
+long-document splitting and cost; [kb-agent](crates/kb-agent/README.md) for the
 flags.
 
 ## Setup, and why there isn't any
@@ -68,7 +68,7 @@ carry in git, so `samples/` is ignored rather than committed. Put any PDF in
 there and convert it:
 
 ```bash
-./target/release/kb-tree samples/your.pdf     # writes samples/your.md
+./target/release/kb-agent samples/your.pdf     # writes samples/your.md
 ```
 
 Two things are worth confirming by hand on a scanned PDF, because no unit test

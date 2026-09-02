@@ -1,10 +1,10 @@
-# kb-tree — a workspace of libraries and the one command that drives them.
+# kb-agent — a workspace of libraries and the one command that drives them.
 #
 #   crates/pdf-extractor   PDF in, Markdown out, OCR included. No I/O policy,
 #                          no CLI.
 #   crates/agent           Markdown in, a shorter Markdown summary out, via an
 #                          LLM. No I/O policy, no CLI.
-#   crates/kb-tree         the command anyone actually runs.
+#   crates/kb-agent        the command anyone actually runs.
 #
 # Everything shared between them lives here so the manifests only have to say
 # what makes them different.
@@ -17,7 +17,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/bigmah/kb-tree"
+repository = "https://github.com/bigmah/kb-agent"
 
 [workspace.dependencies]
 pdf-extractor = { path = "crates/pdf-extractor", version = "0.1.0" }

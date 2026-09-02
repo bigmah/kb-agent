@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 build = "build.rs"
 
-# The binary is `kb-tree`; this crate is the library it calls. `vendor/` holds
+# The binary is `kb-agent`; this crate is the library it calls. `vendor/` holds
 # multi-hundred-megabyte shared libraries fetched by build.rs, so keep the
 # published package to the sources and the fetch script.
 include = ["src/**/*", "examples/**/*", "build.rs", "scripts/**/*", "README.md"]

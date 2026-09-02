@@ -1,5 +1,5 @@
 [package]
-name = "kb-tree"
+name = "kb-agent"
 description = "Command-line entry point: turn documents into Markdown"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "kb-tree"
+name = "kb-agent"
 path = "src/main.rs"
 
 [dependencies]

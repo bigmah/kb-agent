@@ -1,4 +1,4 @@
-# kb-tree
+# kb-agent
 
 The command. Conversion itself lives in
 [`pdf-extractor`](../pdf-extractor); everything here is what a library should
@@ -6,7 +6,7 @@ not decide — what the flags are called, where output goes, and what gets said
 on the way.
 
 ```
-kb-tree <input.pdf> [OPTIONS]
+kb-agent <input.pdf> [OPTIONS]
 
   -o, --output <file>   Write Markdown here (default: <input> with a .md extension)
       --stdout          Write Markdown to stdout instead of a file
@@ -43,7 +43,7 @@ A run that will use OCR says so up front, with a page count and a rough
 estimate, then reports progress as it goes:
 
 ```
-$ ./target/release/kb-tree samples/book.pdf
+$ ./target/release/kb-agent samples/book.pdf
 samples/book.pdf: 595 page(s), Scanned (confidence 0.95)
 OCR: 595 page(s) at 300 DPI on CPU across 7 workers, about 2 min — the ~31 MB model set downloads on first use
 OCR: page 300 of 595

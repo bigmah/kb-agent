@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use pdf_extractor::{DEFAULT_OCR_DPI, Ocr, Options, Survey};
 
 pub const USAGE: &str = "\
-kb-tree — convert a PDF into a Markdown file
+kb-agent — convert a PDF into a Markdown file
 
 USAGE:
-    kb-tree <input.pdf> [OPTIONS]
+    kb-agent <input.pdf> [OPTIONS]
 
 OPTIONS:
     -o, --output <file>   Write Markdown here (default: <input> with a .md extension)

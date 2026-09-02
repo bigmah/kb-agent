@@ -128,7 +128,7 @@ fn search_directories() -> Vec<PathBuf> {
     push_vendor(&mut directories, Path::new(env!("CARGO_MANIFEST_DIR")));
 
     // A relocated binary with its libraries alongside, plus the vendor tree of
-    // whatever tree it sits in — `target/release/kb-tree` reaches the workspace
+    // whatever tree it sits in — `target/release/kb-agent` reaches the workspace
     // root in two hops. Inside this workspace `CARGO_MANIFEST_DIR` above is the
     // one that actually hits; this covers a binary that was moved.
     if let Ok(executable) = std::env::current_exe()

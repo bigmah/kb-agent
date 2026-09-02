@@ -1822,7 +1822,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kb-tree"
+name = "kb-agent"
 version = "0.1.0"
 dependencies = [
  "pdf-extractor",
