@@ -59,6 +59,16 @@ pub fn stages() -> impl Fn(kb::Progress) + Send + Sync + 'static {
     }
 }
 
+/// Wipe a counter that was cut off mid-count, so the next line starts at the
+/// margin. Only a terminal has anything to wipe; piped, the counter was
+/// whole lines.
+pub fn clear_line() {
+    if std::io::stderr().is_terminal() {
+        eprint!("\r{:width$}\r", "", width = 48);
+        let _ = std::io::stderr().flush();
+    }
+}
+
 struct Counter {
     interactive: bool,
     label: &'static str,

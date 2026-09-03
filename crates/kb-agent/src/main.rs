@@ -7,6 +7,7 @@
 //! are called, where the output goes, and what gets said on the way.
 
 mod build;
+mod chat;
 mod cli;
 mod convert;
 mod progress;
@@ -48,6 +49,7 @@ fn run() -> Result<ExitCode, String> {
         Command::Build(args) => build::run(*args),
         Command::Status(dir) => status::run(&dir).map(|()| ExitCode::SUCCESS),
         Command::Query(args) => query::run(*args).map(|()| ExitCode::SUCCESS),
+        Command::Chat(args) => chat::run(*args).map(|()| ExitCode::SUCCESS),
     }
 }
 

@@ -48,3 +48,11 @@ tokio = { version = "1", default-features = false, features = ["rt", "time", "sy
 # bounded number at a time, results as they land. Already in the tree via rig.
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 walkdir = "2"
+
+# The chat's prompt: line editing and a history file, nothing more. The
+# default features add key-binding customization and a home-directory lookup
+# this program has no use for.
+rustyline = { version = "18", default-features = false, features = ["with-file-history"] }
+# Ctrl-C as a flag the chat can read, so that it stops the command running
+# and not the session.
+ctrlc = "3"

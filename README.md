@@ -8,6 +8,7 @@ context holding nothing else — and the answer is written from what they said.
 cargo build --release
 ./target/release/kb-agent build library/                      # every PDF → Markdown → summary
 ./target/release/kb-agent query library/ "What limits the throughput of an order book?"
+./target/release/kb-agent chat library/                       # a prompt: questions, and /commands for the rest
 ```
 
 ## Why
@@ -64,7 +65,7 @@ or find the holes in an idea — is meant to consume that list and act.
 | [`crates/pdf-extractor`](crates/pdf-extractor) | PDF in, Markdown out, OCR included. |
 | [`crates/agent`](crates/agent) | One LLM request with a fresh context, in each role above: summarize, judge relevance, answer from one document, compare two points, merge them, answer from the list. |
 | [`crates/kb`](crates/kb) | The directory as a library: the index by path, building it, and running a question through every document in it. |
-| [`crates/kb-agent`](crates/kb-agent) | The command. Flags, files, and everything said on the way. |
+| [`crates/kb-agent`](crates/kb-agent) | The command. Flags, files, everything said on the way, and a prompt to say it at. |
 | `samples/` | Untracked scratch for trying the tools on real documents — see below. |
 
 The split is the point: each library decides nothing about where output goes or
@@ -123,6 +124,7 @@ PDFs in a directory and build it:
 ./target/release/kb-agent build samples/
 ./target/release/kb-agent status samples/
 ./target/release/kb-agent query samples/ "…" --plan     # what would be judged, nothing sent
+./target/release/kb-agent chat samples/                 # the same at a prompt: /plan …, /status, /runs
 ```
 
 Two things are worth confirming by hand on a scanned PDF, because no unit test
@@ -137,8 +139,10 @@ Markdown, and that the summary line's page counts match the document.
   pairs that are plainly unrelated — are not taken, so as to measure the
   plain version first.
 - **A query does not resume.** Each stage's files are written as it finishes,
-  but a run that dies in the reduction starts the reduction over. An `answer`
-  command that takes a saved `points.md` would be the cheap half of that.
+  but a run that dies in the reduction starts the reduction over. The cheap
+  half is there — `/answer` in the chat puts a new question to a saved
+  `points.md` in one request — but a saved `points.raw.md` cannot yet be
+  handed back to the reduction.
 - **One model for every role.** The mask and the comparisons could go to a
   smaller model than the reads; there is one `--model` for now.
 - **Documents that do not fit are skipped.** Deliberately, for now.

@@ -25,6 +25,7 @@ pub struct ConvertOptions {
     pub(crate) extractor: pdf_extractor::Options,
     pub(crate) force: bool,
     pub(crate) progress: Option<Arc<dyn Fn(Progress) + Send + Sync>>,
+    pub(crate) stop: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 
 impl Default for ConvertOptions {
@@ -33,6 +34,7 @@ impl Default for ConvertOptions {
             extractor: pdf_extractor::Options::new(),
             force: false,
             progress: None,
+            stop: None,
         }
     }
 }
@@ -60,10 +62,26 @@ impl ConvertOptions {
         self
     }
 
+    /// Asked before each PDF; `true` ends the run there.
+    ///
+    /// A conversion is minutes of CPU that cannot be given up half-way, so
+    /// between documents is the one place a run can stop without losing
+    /// work. What was converted is reported as usual; what was not is
+    /// counted in [`ConvertReport::remaining`]. An interactive caller wires
+    /// this to Ctrl-C.
+    pub fn stop_when(mut self, should_stop: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        self.stop = Some(Arc::new(should_stop));
+        self
+    }
+
     fn emit(&self, event: Progress) {
         if let Some(callback) = &self.progress {
             callback(event);
         }
+    }
+
+    fn should_stop(&self) -> bool {
+        self.stop.as_ref().is_some_and(|stop| stop())
     }
 }
 
@@ -78,6 +96,9 @@ pub struct ConvertReport {
     /// Sources whose PDF could not be converted, with the extractor's reason.
     /// The rest of the build carries on without them.
     pub failed: Vec<(String, String)>,
+    /// PDFs still waiting when [`ConvertOptions::stop_when`] ended the run.
+    /// Zero for a run that went to the end.
+    pub remaining: usize,
     pub elapsed_ms: u64,
 }
 
@@ -90,6 +111,9 @@ impl ConvertReport {
         }
         if !self.failed.is_empty() {
             parts.push(format!("{} failed", self.failed.len()));
+        }
+        if self.remaining > 0 {
+            parts.push(format!("stopped with {} to go", self.remaining));
         }
         format!(
             "convert: {}, {}",
@@ -122,6 +146,10 @@ impl Corpus {
 
         let total = pending.len();
         for (done, (name, pdf, markdown)) in pending.into_iter().enumerate() {
+            if options.should_stop() {
+                report.remaining = total - done;
+                break;
+            }
             options.emit(Progress::Converting {
                 name: name.clone(),
                 done,
@@ -358,6 +386,31 @@ mod tests {
         assert_eq!(report.skipped, 1);
         assert!(report.converted.is_empty());
         assert!(report.failed.is_empty());
+    }
+
+    #[test]
+    fn a_run_told_to_stop_counts_what_it_left() {
+        let dir = Scratch::new("stop");
+        dir.write("one.pdf", "%PDF");
+        dir.write("two.pdf", "%PDF");
+        dir.write("three.pdf", "%PDF");
+        let mut corpus = Corpus::scan(&dir.0).unwrap();
+        // Stop as soon as one has been attempted.
+        let attempted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = attempted.clone();
+        let options = ConvertOptions::new()
+            .progress(move |_| {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
+            .stop_when(move || attempted.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+        let report = corpus.convert(&options).unwrap();
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert_eq!(report.remaining, 2);
+        assert!(report.describe().contains("stopped with 2 to go"), "{}", report.describe());
+
+        let report = corpus.convert(&ConvertOptions::new()).unwrap();
+        assert_eq!(report.remaining, 0);
+        assert!(!report.describe().contains("stopped"));
     }
 
     #[test]

@@ -105,8 +105,10 @@ them until they fit.
 `SummarizeOptions` and `QueryOptions` each take an `agent::Options` — provider,
 model, context budget, output cap, retries — plus `concurrency`, `progress`,
 and for the query, `reduce` and `answer`. `ConvertOptions` takes a
-`pdf_extractor::Options` for OCR and page settings. Every option has a default
-that works.
+`pdf_extractor::Options` for OCR and page settings, and `stop_when`, a
+closure asked between PDFs so an interactive caller can end a conversion loop
+on Ctrl-C without losing the document under way; the report counts what was
+left. Every option has a default that works.
 
 `Progress` is one enum for all of it: a count landed for whichever stage is
 running. The `kb-agent` command's counters are one `match` on it.

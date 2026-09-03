@@ -8,6 +8,18 @@ use crate::cli::BuildArgs;
 use crate::progress;
 
 pub fn run(args: BuildArgs) -> Result<ExitCode, String> {
+    crate::block_on(run_async(&args, || false))?
+}
+
+/// The whole of [`run`], for a caller with a runtime of its own — the chat.
+///
+/// `stop` is asked between PDFs, and once more before any summary is sent;
+/// `true` ends the build there, with what was made reported as usual. The
+/// summaries themselves are cancelled by dropping the future.
+pub async fn run_async(
+    args: &BuildArgs,
+    stop: impl Fn() -> bool + Send + Sync + Clone + 'static,
+) -> Result<ExitCode, String> {
     // Must precede anything that could spawn a thread — see `convert.rs`.
     pdf_extractor::init();
 
@@ -49,13 +61,22 @@ pub fn run(args: BuildArgs) -> Result<ExitCode, String> {
         let options = ConvertOptions::new()
             .extractor(args.extractor.clone().progress(progress::ocr()))
             .force(args.reconvert)
-            .progress(progress::stages());
+            .progress(progress::stages())
+            .stop_when(stop.clone());
         let report = corpus.convert(&options).map_err(|e| e.to_string())?;
         eprintln!("{}", report.describe());
         for (name, why) in &report.failed {
             eprintln!("  {name}: {why}");
         }
-        failures += report.failed.len();
+        failures += report.failed.len() + report.remaining;
+    }
+
+    if args.summaries && stop() {
+        // The conversion loop stopped on request; sending summaries now
+        // would only be cancelled a moment later, after the requests had
+        // gone out.
+        eprintln!("build: stopped before summarizing");
+        return Ok(ExitCode::FAILURE);
     }
 
     if args.summaries {
@@ -68,7 +89,7 @@ pub fn run(args: BuildArgs) -> Result<ExitCode, String> {
             .concurrency(args.llm.concurrency)
             .force(args.force)
             .progress(progress::stages());
-        let report = crate::block_on(corpus.summarize(&options))?.map_err(|e| e.to_string())?;
+        let report = corpus.summarize(&options).await.map_err(|e| e.to_string())?;
         eprintln!("{}", report.describe());
         for (name, tokens) in &report.too_large {
             eprintln!(

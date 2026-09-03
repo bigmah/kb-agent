@@ -12,9 +12,18 @@ use crate::cli::QueryArgs;
 use crate::progress;
 
 /// Where a query's files go when `--output` is not given, under the library.
-const QUERIES_DIR: &str = ".kb-agent/queries";
+pub(crate) const QUERIES_DIR: &str = ".kb-agent/queries";
 
 pub fn run(args: QueryArgs) -> Result<(), String> {
+    crate::block_on(run_async(&args))?.map(|_| ())
+}
+
+/// The whole of [`run`], for a caller with a runtime of its own — the chat.
+///
+/// Returns where the files went, or `None` when `--plan` stopped it short of
+/// sending anything. Dropping the future cancels the stage in flight; the
+/// stages before it have already been written.
+pub async fn run_async(args: &QueryArgs) -> Result<Option<PathBuf>, String> {
     let corpus = Corpus::scan(&args.dir).map_err(|e| e.to_string())?;
     let options = QueryOptions::new()
         .agent(args.llm.options())
@@ -41,7 +50,7 @@ pub fn run(args: QueryArgs) -> Result<(), String> {
         ));
     }
     if args.plan {
-        return Ok(());
+        return Ok(None);
     }
 
     let out = args
@@ -53,7 +62,8 @@ pub fn run(args: QueryArgs) -> Result<(), String> {
     write(&out, "question.md", &format!("{}\n", args.question))?;
     eprintln!("writing to {}", out.display());
 
-    crate::block_on(stages(&corpus, &args, &options, &out))?
+    stages(&corpus, args, &options, &out).await?;
+    Ok(Some(out))
 }
 
 async fn stages(
@@ -132,8 +142,8 @@ fn write(dir: &Path, name: &str, text: &str) -> Result<(), String> {
 
 /// `20260902-141500-what-limits-throughput`: sorts by time, reads as the
 /// question.
-fn run_name(question: &str) -> PathBuf {
-    PathBuf::from(format!("{}-{}", timestamp(), slug(question)))
+pub(crate) fn run_name(question: &str) -> String {
+    format!("{}-{}", timestamp(), slug(question))
 }
 
 /// The question as a directory name: lowercase, hyphens for everything that

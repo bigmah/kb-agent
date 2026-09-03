@@ -16,3 +16,5 @@ pdf-extractor.workspace = true
 agent.workspace = true
 kb.workspace = true
 tokio.workspace = true
+rustyline.workspace = true
+ctrlc.workspace = true

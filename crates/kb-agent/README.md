@@ -10,6 +10,7 @@ the way.
 kb-agent build <dir> [OPTIONS]                Every PDF into Markdown, every Markdown into a summary
 kb-agent status <dir>                         What is built and what is not
 kb-agent query <dir> "<question>" [OPTIONS]   Put a question to every document in the library
+kb-agent chat <dir> [OPTIONS]                 A prompt: questions, with the rest as /commands
 kb-agent convert <input.pdf> [OPTIONS]        One PDF into Markdown
 kb-agent <input.pdf> [OPTIONS]                The same as convert
 ```
@@ -103,6 +104,57 @@ under the library.
 
 A request that fails after its retries stops the query: the answer comes from
 the whole library or not at all.
+
+## chat
+
+```
+$ kb-agent chat library/
+library/: 12 sources: 11 sources ready to query, 1 document to summarize
+Ask a question, or /help for the commands.
+library> What limits the throughput of an order book?
+library/: 11 sources to judge, 1 excluded, with gpt-5.6 via OpenAI, 8 at a time
+  excluded finance/hull-options-futures: not summarized yet
+writing to library/.kb-agent/queries/20260902-141500-what-limits-the-throughput-of-an-order-book
+mask: 4 of 11 sources relevant (1 excluded) — 11 requests, 118204 in, 22 out, 8.1 s
+…
+library> /answer Which of those limits are physical, and which are policy?
+answer: from points.md in 20260902-141500-what-limits-the-throughput-of-an-order-book, with gpt-5.6 via OpenAI, 8 at a time
+done: 1 request to gpt-5.6 — 4188 in, 610 out, 14.2 s
+wrote library/.kb-agent/queries/20260902-141500-what-limits-the-throughput-of-an-order-book/followup-20260902-142211-which-of-those-limits-are-physical-and-which-are.md
+…
+library> /runs
+  1  20260902-141500-what-limits-the-throughput-of-an-order-book  (answer)
+     What limits the throughput of an order book?
+library> /quit
+```
+
+A line that does not start with `/` is a question, run exactly as `query`
+runs it: the same stages, the same files under `.kb-agent/queries/`, the
+answer printed. The rest are commands:
+
+| Command | What |
+| --- | --- |
+| `/status` | what is built and what is not |
+| `/build [OPTIONS]` | convert and summarize, with `build`'s options; the session's LLM settings apply unless a flag on the line says otherwise |
+| `/convert <file.pdf> [OPTIONS]` | one PDF into Markdown, with `convert`'s options |
+| `/plan <question>` | which sources a question would reach, sending nothing |
+| `/answer <question>` | a follow-up put to the last run's `points.md` in one request, without reading the library again; written beside it as `followup-<time>-<question>.md` |
+| `/runs` | the runs so far, newest first, with how far each got |
+| `/show [run]`, `/points [run]` | the answer or the list from the last run, or from a run by its number in `/runs` or its name |
+| `/set`, `/set <name> <value>` | the session's settings: the LLM flags by name, plus `reduce` and `answer` on or off. `/set` alone shows them, and whether the provider's key is in the environment |
+| `/open <dir>` | switch to another library |
+| `/quit` | leave; so does Ctrl-D |
+
+Ctrl-C stops the command running and comes back to the prompt. Requests in
+flight are dropped; a PDF being converted is abandoned, reported as failed,
+and the build stops there; files already written stay, so a run stopped in
+the reduction still has its `points.raw.md`, and `/runs` lists it as
+unfinished. The line history is kept in `<dir>/.kb-agent/history`.
+
+Each question is fresh: the library is read for it, not for the conversation
+so far. `/answer` is the exception, and it reads nothing — it puts a new
+question to the list the last question distilled, which is cheap, and only as
+good as that list's coverage of the new question.
 
 ## convert
 

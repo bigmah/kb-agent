@@ -12,6 +12,7 @@ USAGE:
     kb-agent build <dir> [OPTIONS]                Every PDF into Markdown, every Markdown into a summary
     kb-agent status <dir>                         What is built and what is not
     kb-agent query <dir> \"<question>\" [OPTIONS]   Put a question to every document in the library
+    kb-agent chat <dir> [OPTIONS]                 A prompt: questions, with the rest as /commands
     kb-agent convert <input.pdf> [OPTIONS]        One PDF into Markdown
     kb-agent <input.pdf> [OPTIONS]                The same as convert
 
@@ -53,8 +54,10 @@ It is slow — budget a couple of seconds per such page — but needs no setup:
 
 The input PDF is read only and left untouched.";
 
-pub const LLM_USAGE: &str = "\
-        --provider <name>       openai (default) or anthropic; the key comes from
+// The first line is not continued from the quote: a `\` there would strip
+// the indent along with the newline.
+pub const LLM_USAGE: &str =
+    "        --provider <name>       openai (default) or anthropic; the key comes from
                                 OPENAI_API_KEY or ANTHROPIC_API_KEY
         --model <name>          Model to use (default: the provider's own)
         --concurrency <n>       Requests in flight at once (default: 8)
@@ -116,12 +119,36 @@ OPTIONS:
 LLM OPTIONS:
 {LLM}";
 
+pub const CHAT_USAGE: &str = "\
+kb-agent chat — a prompt on a library
+
+USAGE:
+    kb-agent chat <dir> [OPTIONS]
+
+A line that does not start with / is a question, run exactly as
+`kb-agent query <dir> \"<question>\"` would run it: the answer is printed and
+the run's files are kept under <dir>/.kb-agent/queries/. A line that starts
+with / is a command — build, status and convert as they are here, plus what
+only makes sense in a session: settings that hold from one question to the
+next, the runs so far, and a follow-up put to the last run's list without
+reading the library again. /help lists them.
+
+Ctrl-C stops the command running and comes back to the prompt. Ctrl-D leaves.
+The line history is kept in <dir>/.kb-agent/history.
+
+OPTIONS:
+    -h, --help                  Show this help
+
+LLM OPTIONS (the session's starting settings; /set changes them):
+{LLM}";
+
 /// What the command line asked for.
 pub enum Command {
     Convert(Box<Invocation>),
     Build(Box<BuildArgs>),
     Status(PathBuf),
     Query(Box<QueryArgs>),
+    Chat(Box<ChatArgs>),
     /// Print this text and stop.
     Help(String),
     Version,
@@ -139,6 +166,7 @@ pub fn parse(argv: impl Iterator<Item = String>) -> Result<Command, String> {
         "build" => parse_build(argv),
         "status" => parse_status(argv),
         "query" => parse_query(argv),
+        "chat" | "repl" => parse_chat(argv),
         other if other.starts_with('-') => Err(format!("unknown option {other}\n\n{USAGE}")),
         // `kb-agent book.pdf`, as the command has always been used.
         _ => parse_convert(std::iter::once(first).chain(argv)),
@@ -299,6 +327,7 @@ impl Invocation {
 
 /// The flags that become an [`agent::Options`], plus the one that is the
 /// library's: how many requests to keep in flight.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Llm {
     pub provider: Provider,
     pub model: Option<String>,
@@ -324,7 +353,7 @@ impl Default for Llm {
 impl Llm {
     /// Take `arg` if it is one of these flags, consuming its value. `false`
     /// means it was not one of these.
-    fn take(
+    pub(crate) fn take(
         &mut self,
         arg: &str,
         argv: &mut impl Iterator<Item = String>,
@@ -367,6 +396,31 @@ impl Llm {
             self.provider.name(),
             self.concurrency
         )
+    }
+
+    /// These settings as the flags that would produce them, so a command
+    /// line assembled inside the chat can go through the same parser as one
+    /// typed at the shell. Later flags win there, so anything appended
+    /// overrides these.
+    pub fn flags(&self) -> Vec<String> {
+        let mut flags = vec![
+            "--provider".to_string(),
+            self.provider.name().to_ascii_lowercase(),
+        ];
+        if let Some(model) = &self.model {
+            flags.push("--model".to_string());
+            flags.push(model.clone());
+        }
+        for (flag, value) in [
+            ("--concurrency", self.concurrency.to_string()),
+            ("--context-tokens", self.context_tokens.to_string()),
+            ("--max-tokens", self.max_tokens.to_string()),
+            ("--retries", self.retries.to_string()),
+        ] {
+            flags.push(flag.to_string());
+            flags.push(value);
+        }
+        flags
     }
 }
 
@@ -537,6 +591,39 @@ fn parse_query(argv: impl Iterator<Item = String>) -> Result<Command, String> {
         reduce,
         answer,
     })))
+}
+
+// --- chat ------------------------------------------------------------------
+
+pub struct ChatArgs {
+    pub dir: PathBuf,
+    pub llm: Llm,
+}
+
+fn parse_chat(argv: impl Iterator<Item = String>) -> Result<Command, String> {
+    let usage = CHAT_USAGE.replace("{LLM}", LLM_USAGE);
+    let mut dir = None;
+    let mut llm = Llm::default();
+
+    let mut argv = argv.peekable();
+    while let Some(arg) = argv.next() {
+        if llm.take(&arg, &mut argv)? {
+            continue;
+        }
+        match arg.as_str() {
+            "-h" | "--help" => return Ok(Command::Help(usage)),
+            other if other.starts_with('-') => {
+                return Err(format!("unknown option {other}\n\n{usage}"));
+            }
+            other => {
+                if dir.replace(PathBuf::from(other)).is_some() {
+                    return Err(format!("unexpected extra argument {other}\n\n{usage}"));
+                }
+            }
+        }
+    }
+    let dir = dir.ok_or_else(|| format!("no directory given\n\n{usage}"))?;
+    Ok(Command::Chat(Box::new(ChatArgs { dir, llm })))
 }
 
 // --- shared pieces ---------------------------------------------------------
@@ -712,12 +799,55 @@ mod tests {
     }
 
     #[test]
+    fn a_chat_takes_a_directory_and_the_llm_flags() {
+        let args = match parse_argv(&["chat", "lib", "--provider", "claude", "--retries", "2"]) {
+            Ok(Command::Chat(args)) => *args,
+            other => panic!("expected a chat, got {:?}", other.map(|_| ())),
+        };
+        assert_eq!(args.dir, PathBuf::from("lib"));
+        assert_eq!(args.llm.provider, Provider::Anthropic);
+        assert_eq!(args.llm.retries, 2);
+        assert!(matches!(parse_argv(&["repl", "lib"]).unwrap(), Command::Chat(_)));
+        assert!(parse_argv(&["chat", "lib", "--plan"]).is_err());
+        assert!(parse_argv(&["chat", "a", "b"]).is_err());
+        match parse_argv(&["chat", "--help"]).unwrap() {
+            Command::Help(text) => assert!(text.contains("--provider") && !text.contains("{LLM}")),
+            _ => panic!("expected help"),
+        }
+    }
+
+    #[test]
+    fn llm_settings_survive_a_trip_through_their_own_flags() {
+        for provider in [Provider::OpenAi, Provider::Anthropic] {
+            let llm = Llm {
+                provider,
+                model: Some("m".to_string()),
+                concurrency: 3,
+                context_tokens: 12_000,
+                max_tokens: 900,
+                retries: 1,
+            };
+            let mut argv = vec!["query".to_string(), "lib".to_string()];
+            argv.extend(llm.flags());
+            argv.push("q".to_string());
+            let parsed = parse(argv.into_iter()).expect("parses");
+            match parsed {
+                Command::Query(args) => assert_eq!(args.llm, llm),
+                _ => panic!("expected a query"),
+            }
+        }
+        let flags = Llm::default().flags();
+        assert!(!flags.contains(&"--model".to_string()), "no model means the provider's");
+    }
+
+    #[test]
     fn every_command_wants_its_argument() {
         assert!(parse_argv(&["query", "lib"]).is_err());
         assert!(parse_argv(&["query"]).is_err());
         assert!(parse_argv(&["build"]).is_err());
         assert!(parse_argv(&["status"]).is_err());
         assert!(parse_argv(&["status", "a", "b"]).is_err());
+        assert!(parse_argv(&["chat"]).is_err());
         assert!(parse_argv(&[]).is_err());
     }
 
